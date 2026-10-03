@@ -1,0 +1,330 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PASSENGER
+  ADMIN
+  STAFF
+}
+enum SeatType {
+  WINDOW
+  MIDDLE
+  AISLE
+}
+enum SeatStatus {
+  AVAILABLE
+  HELD
+  BOOKED
+}
+enum AllocationStatus {
+  HELD
+  BOOKED
+}
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  WAITING
+  CANCELLED
+  FAILED
+}
+enum WaitingStatus {
+  WAITING
+  PROMOTED
+  CANCELLED
+}
+enum TransactionType {
+  BOOKING
+  CANCELLATION
+  REFUND
+  WAITING_LIST_PROMOTION
+  SEAT_ALLOCATION
+  UNDO
+}
+enum TransactionStatus {
+  INITIATED
+  PROCESSING
+  SUCCESS
+  FAILED
+  REVERSED
+}
+enum PaymentMethod {
+  UPI
+  CARD
+  NET_BANKING
+  WALLET
+  CASH
+}
+enum PaymentStatus {
+  INITIATED
+  PROCESSING
+  SUCCESS
+  FAILED
+  PENDING
+  REFUNDED
+}
+enum Gender {
+  FEMALE
+  MALE
+  NON_BINARY
+  UNDISCLOSED
+}
+enum MedicalPriority {
+  HIGH
+  MEDIUM
+  NORMAL
+}
+enum MedicalStatus {
+  REQUESTED
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model User {
+  id String @id @default(cuid())
+  name String
+  email String @unique
+  phone String?
+  passwordHash String
+  role Role @default(PASSENGER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  passengers Passenger[]
+  bookings Booking[]
+  transactions Transaction[]
+  medicalRequests MedicalRequest[]
+  undoTransactions UndoTransaction[]
+  auditLogs AuditLog[]
+}
+
+model Passenger {
+  id String @id @default(cuid())
+  userId String?
+  fullName String
+  age Int
+  gender Gender @default(UNDISCLOSED)
+  phone String?
+  idType String?
+  idNumber String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  bookingPassengers BookingPassenger[]
+  @@index([userId])
+  @@index([fullName])
+}
+
+model Station {
+  id String @id @default(cuid())
+  code String @unique
+  name String
+  city String
+  routes TrainRoute[]
+}
+
+model Train {
+  id String @id @default(cuid())
+  trainNumber String @unique
+  trainName String
+  source String
+  destination String
+  departureTime String
+  arrivalTime String
+  duration String
+  baseFare Decimal @default(500) @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  routes TrainRoute[]
+  coaches Coach[]
+  bookings Booking[]
+  @@index([source, destination])
+}
+
+model TrainRoute {
+  id String @id @default(cuid())
+  trainId String
+  stationId String
+  stopOrder Int
+  arrivalTime String?
+  departureTime String?
+  train Train @relation(fields: [trainId], references: [id], onDelete: Cascade)
+  station Station @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  @@unique([trainId, stopOrder])
+  @@index([stationId])
+}
+
+model Coach {
+  id String @id @default(cuid())
+  trainId String
+  coachNumber String
+  coachType String
+  capacity Int
+  train Train @relation(fields: [trainId], references: [id], onDelete: Cascade)
+  seats Seat[]
+  bookingPassengers BookingPassenger[]
+  @@unique([trainId, coachNumber])
+  @@index([trainId])
+}
+
+model Seat {
+  id String @id @default(cuid())
+  coachId String
+  seatNumber String
+  seatType SeatType
+  status SeatStatus @default(AVAILABLE)
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  allocations SeatAllocation[]
+  bookingPassengers BookingPassenger[]
+  @@unique([coachId, seatNumber])
+  @@index([coachId, status])
+}
+
+model SeatAllocation {
+  id String @id @default(cuid())
+  seatId String
+  journeyDate DateTime @db.Date
+  status AllocationStatus
+  holdToken String?
+  heldUntil DateTime?
+  bookingPassengerId String? @unique
+  createdAt DateTime @default(now())
+  seat Seat @relation(fields: [seatId], references: [id], onDelete: Cascade)
+  bookingPassenger BookingPassenger? @relation(fields: [bookingPassengerId], references: [id], onDelete: SetNull)
+  @@unique([seatId, journeyDate])
+  @@index([holdToken])
+  @@index([journeyDate, status, heldUntil])
+}
+
+model Booking {
+  id String @id @default(cuid())
+  pnr String @unique
+  idempotencyKey String?
+  userId String
+  trainId String
+  journeyDate DateTime @db.Date
+  status BookingStatus @default(PENDING)
+  totalAmount Decimal @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  train Train @relation(fields: [trainId], references: [id], onDelete: Restrict)
+  passengers BookingPassenger[]
+  waitingList WaitingList?
+  transactions Transaction[]
+  payment Payment?
+  @@unique([userId, idempotencyKey])
+  @@index([trainId, journeyDate, status])
+  @@index([userId, createdAt])
+}
+
+model BookingPassenger {
+  id String @id @default(cuid())
+  bookingId String
+  passengerId String
+  position Int @default(0)
+  seatId String?
+  coachId String?
+  seatPreference SeatType?
+  fare Decimal @db.Decimal(10, 2)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  passenger Passenger @relation(fields: [passengerId], references: [id], onDelete: Restrict)
+  seat Seat? @relation(fields: [seatId], references: [id], onDelete: SetNull)
+  coach Coach? @relation(fields: [coachId], references: [id], onDelete: SetNull)
+  allocation SeatAllocation?
+  @@index([bookingId])
+}
+
+model WaitingList {
+  id String @id @default(cuid())
+  bookingId String @unique
+  position Int
+  status WaitingStatus @default(WAITING)
+  createdAt DateTime @default(now())
+  promotedAt DateTime?
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  @@index([status, createdAt, position])
+}
+
+model Transaction {
+  id String @id @default(cuid())
+  userId String
+  bookingId String?
+  type TransactionType
+  status TransactionStatus
+  amount Decimal @db.Decimal(10, 2)
+  paymentMethod PaymentMethod?
+  referenceId String @unique
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  payment Payment?
+  undo UndoTransaction?
+  @@index([userId, createdAt])
+  @@index([bookingId, type])
+  @@index([type, status, createdAt])
+}
+
+model Payment {
+  id String @id @default(cuid())
+  transactionId String @unique
+  bookingId String @unique
+  amount Decimal @db.Decimal(10, 2)
+  currency String @default("INR")
+  paymentMethod PaymentMethod
+  status PaymentStatus
+  gatewayReference String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  @@index([status, createdAt])
+}
+
+model MedicalRequest {
+  id String @id @default(cuid())
+  userId String?
+  pnr String
+  coach String
+  seat String
+  condition String
+  contact String?
+  priority MedicalPriority @default(NORMAL)
+  status MedicalStatus @default(REQUESTED)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([priority, status, createdAt])
+  @@index([pnr])
+}
+
+model UndoTransaction {
+  id String @id @default(cuid())
+  userId String
+  transactionId String @unique
+  operation String
+  payload Json
+  reversible Boolean @default(true)
+  reversedAt DateTime?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  @@index([userId, reversible, reversedAt, createdAt])
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+  userId String?
+  action String
+  entity String
+  entityId String?
+  metadata Json?
+  createdAt DateTime @default(now())
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([entity, entityId, createdAt])
+  @@index([userId, createdAt])
+}
