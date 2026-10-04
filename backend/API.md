@@ -22,14 +22,14 @@ Base URL: `http://localhost:4000/api`. Successful and error responses use `{ "su
 
 - `POST /bookings` — `{ trainId, journeyDate, passengers: [{ fullName, age, gender, phone? }], seatPreference?, groupBooking?, seatIds?, paymentMethod, idempotencyKey }`
 - `GET /bookings`, `GET /bookings/:id`, `GET /bookings/pnr/:pnr`
-- `POST /bookings/:id/cancel` — cancellation, mock refund, and FIFO queue promotion
-- `POST /payments/process` — `{ bookingId }`; mock result is success, failure, or pending
+- `POST /bookings/:id/cancel` — cancellation and FIFO queue promotion; refunds are recorded as pending ledger transactions
+- `POST /payments/process` — `{ bookingId }`; returns `503 PAYMENT_PROVIDER_UNAVAILABLE` until a payment gateway is configured
 - `GET /payments/:id`
 - `POST /transactions/undo` — undo the latest eligible transaction
 - `GET /transactions`, `GET /transactions/:id`
 - `GET /waiting-list`, `POST /waiting-list` — `{ bookingId }`; `POST /waiting-list/:id/promote` (staff/admin)
 
-Booking requests are protected by an idempotency key. Allocation occurs in a serializable database transaction, with row-level locking and a unique `(seatId, journeyDate)` allocation constraint as the final concurrency guard. A group request prefers a contiguous run when available. The payment adapter is intentionally simulated and does not connect to a payment provider.
+Booking requests are protected by an idempotency key. Allocation occurs in a serializable database transaction, with row-level locking and a unique `(seatId, journeyDate)` allocation constraint as the final concurrency guard. A group request prefers a contiguous run when available. Paid bookings remain pending against a temporary seat hold until an external payment provider is integrated; the API never fabricates payment success or refunds.
 
 ## Passengers, medical, analytics
 
@@ -39,4 +39,4 @@ Booking requests are protected by an idempotency key. Allocation occurs in a ser
 - `GET /analytics/occupancy`, `/analytics/bookings`, `/analytics/revenue` — staff/admin
 - `GET /health` — API liveness
 
-All request bodies are validated with Zod. Medical records are demonstration data only; they do not dispatch real-world emergency assistance.
+All request bodies are validated with Zod. Medical requests are persisted operational records and do not dispatch real-world emergency assistance.

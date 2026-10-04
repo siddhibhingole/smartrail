@@ -33,6 +33,12 @@ enum BookingStatus {
   CANCELLED
   FAILED
 }
+enum ReservationQuota {
+  GENERAL
+  TATKAL
+  LADIES
+  SENIOR_CITIZEN
+}
 enum WaitingStatus {
   WAITING
   PROMOTED
@@ -208,6 +214,8 @@ model Booking {
   trainId String
   journeyDate DateTime @db.Date
   status BookingStatus @default(PENDING)
+  quota ReservationQuota @default(GENERAL)
+  travelClass String @default("ALL")
   totalAmount Decimal @db.Decimal(10, 2)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

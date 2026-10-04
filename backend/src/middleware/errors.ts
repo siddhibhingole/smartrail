@@ -10,6 +10,10 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _req, res, _ne
     const conflict = error.code === 'P2002' || error.code === 'P2034'
     return void res.status(conflict ? 409 : 400).json({ success: false, error: { code: conflict ? 'CONFLICT' : 'DATABASE_ERROR', message: conflict ? 'The requested resource conflicts with an existing operation.' : 'The database rejected the request.' } })
   }
-  console.error('Unhandled request error', error instanceof Error ? error.message : 'unknown')
+  if (error instanceof Prisma.PrismaClientInitializationError || (typeof error === 'object' && error !== null && 'errorCode' in error && error.errorCode === 'P1001')) {
+    console.warn('Database is unavailable for this request.')
+    return void res.status(503).json({ success: false, error: { code: 'DATABASE_UNAVAILABLE', message: 'The database is not reachable. Check the database connection and try again.' } })
+  }
+  console.error('Unhandled request error', error instanceof Error ? error.name : 'unknown')
   return void res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'An unexpected server error occurred.' } })
 }

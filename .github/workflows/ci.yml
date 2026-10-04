@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  backend:
+    name: Backend unit and PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: smartrail
+          POSTGRES_PASSWORD: smartrail
+          POSTGRES_DB: smartrail_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smartrail -d smartrail_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://smartrail:smartrail@localhost:5432/smartrail_test?schema=public
+      DATABASE_TEST_URL: postgresql://smartrail:smartrail@localhost:5432/smartrail_test?schema=public
+      JWT_SECRET: ci-only-secret-that-is-at-least-32-characters-long
+      FRONTEND_URL: http://localhost:5173
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npm run prisma:generate
+        working-directory: backend
+      - run: npm test
+        working-directory: backend
+      - run: npm run test:db
+        working-directory: backend

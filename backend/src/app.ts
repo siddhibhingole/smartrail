@@ -13,13 +13,16 @@ import analyticsRoutes from './routes/analyticsRoutes.js'
 import seatAllocationRoutes from './routes/seatAllocationRoutes.js'
 import { errorHandler } from './middleware/errors.js'
 import { env } from './config/env.js'
+import { prisma } from './config/prisma.js'
 
 export const app=express()
 app.disable('x-powered-by')
 app.use(helmet())
 app.use(cors({origin:env.FRONTEND_URL.split(',').map(origin=>origin.trim()),credentials:true}))
 app.use(express.json({limit:'64kb'}))
-app.get('/health',(_req,res)=>res.json({success:true,data:{status:'ok',service:'smartrail-api'}}))
+const health=async(_req:express.Request,res:express.Response)=>{try{await prisma.$queryRaw`SELECT 1`;res.json({success:true,data:{status:'ok',database:'connected',service:'smartrail-api'}})}catch{res.status(503).json({success:false,error:{code:'DATABASE_UNAVAILABLE',message:'The database is not reachable.'}})}}
+app.get('/health',health)
+app.get('/api/health',health)
 app.use('/api/auth',authRoutes)
 app.use('/api/trains',trainRoutes)
 app.use('/api/bookings',bookingRoutes)

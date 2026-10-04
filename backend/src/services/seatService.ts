@@ -1,33 +1,36 @@
 import { Prisma, type SeatType } from '@prisma/client'
 import { randomUUID } from 'node:crypto'
 import { AppError } from '../utils/http.js'
+import { findContiguousGroup, isContiguousGroup } from '../domain/bookingRules.js'
+import { coachTypesForClass, type TravelClass } from '../domain/travelClass.js'
 
 export type AvailableSeat = { id: string; seatNumber: string; seatType: SeatType; coachId: string; coachNumber: string }
 export const seatService = {
-  async available(tx: Prisma.TransactionClient, trainId: string, journeyDate: Date, limit: number, preference?: SeatType, requestedSeatIds?: string[], groupBooking = false) {
+  async available(tx: Prisma.TransactionClient, trainId: string, journeyDate: Date, limit: number, preference?: SeatType, requestedSeatIds?: string[], groupBooking = false, travelClass: TravelClass = 'ALL') {
     await tx.seatAllocation.deleteMany({ where: { journeyDate, status: 'HELD', heldUntil: { lte: new Date() } } })
     const requestedFilter = requestedSeatIds?.length ? Prisma.sql`AND s."id" IN (${Prisma.join(requestedSeatIds)})` : Prisma.empty
+    const coachTypes = coachTypesForClass(travelClass)
+    const classFilter = coachTypes ? Prisma.sql`AND c."coachType" IN (${Prisma.join(coachTypes)})` : Prisma.empty
     const rows = await tx.$queryRaw<AvailableSeat[]>(Prisma.sql`
       SELECT s."id", s."seatNumber", s."seatType", c."id" AS "coachId", c."coachNumber"
       FROM "Seat" s JOIN "Coach" c ON c."id" = s."coachId"
       WHERE c."trainId" = ${trainId}
         ${requestedFilter}
+        ${classFilter}
         AND NOT EXISTS (SELECT 1 FROM "SeatAllocation" a WHERE a."seatId" = s."id" AND a."journeyDate" = ${journeyDate} AND (a."status" = 'BOOKED' OR (a."status" = 'HELD' AND a."heldUntil" > NOW())))
       ORDER BY c."coachNumber", s."seatNumber"
       LIMIT ${limit * 4}
       FOR UPDATE OF s SKIP LOCKED
     `)
-    if (requestedSeatIds?.length) return requestedSeatIds.map(id => rows.find(seat => seat.id === id)).filter((seat): seat is AvailableSeat => Boolean(seat))
+    if (requestedSeatIds?.length) {
+      const selected = requestedSeatIds.map(id => rows.find(seat => seat.id === id)).filter((seat): seat is AvailableSeat => Boolean(seat))
+      return groupBooking && !isContiguousGroup(selected.map(seat => ({...seat, seatNumber:seat.seatNumber}))) ? [] : selected
+    }
     let ordered = preference ? [...rows.filter(s => s.seatType === preference), ...rows.filter(s => s.seatType !== preference)] : rows
     if (groupBooking && limit > 1) {
+      const contiguous = findContiguousGroup(ordered,limit)
+      if(contiguous)return contiguous
       const coaches = [...new Set(ordered.map(seat => seat.coachId))]
-      for (const coachId of coaches) {
-        const coachSeats = ordered.filter(seat => seat.coachId === coachId).sort((a,b) => Number(a.seatNumber)-Number(b.seatNumber))
-        for (const start of coachSeats) {
-          const run = Array.from({length:limit},(_,offset)=>coachSeats.find(seat=>Number(seat.seatNumber)===Number(start.seatNumber)+offset))
-          if (run.every((seat): seat is AvailableSeat => Boolean(seat))) return run
-        }
-      }
       const sameCoach = coaches.map(id=>ordered.filter(seat=>seat.coachId===id)).find(group=>group.length>=limit)
       if (sameCoach) ordered=[...sameCoach,...ordered.filter(seat=>seat.coachId!==sameCoach[0]!.coachId)]
     }
@@ -40,8 +43,8 @@ export const seatService = {
     return { holdToken, heldUntil }
   },
   async releaseExpired(tx: Prisma.TransactionClient) { return tx.seatAllocation.deleteMany({ where: { status: 'HELD', heldUntil: { lte: new Date() } } }) },
-  async reserveForWaiting(tx: Prisma.TransactionClient, trainId: string, journeyDate: Date, bookingId: string, passengerIds: string[]) {
-    const seats = await this.available(tx, trainId, journeyDate, passengerIds.length, undefined, undefined, passengerIds.length > 1)
+  async reserveForWaiting(tx: Prisma.TransactionClient, trainId: string, journeyDate: Date, bookingId: string, passengerIds: string[], travelClass: TravelClass = 'ALL') {
+    const seats = await this.available(tx, trainId, journeyDate, passengerIds.length, undefined, undefined, passengerIds.length > 1, travelClass)
     if (seats.length < passengerIds.length) return false
     await tx.seatAllocation.createMany({ data: seats.map(s => ({ seatId: s.id, journeyDate, status: 'BOOKED' })) })
     for (const [index, seat] of seats.entries()) {

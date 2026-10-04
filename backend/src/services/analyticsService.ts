@@ -2,10 +2,13 @@ import { prisma } from '../config/prisma.js'
 
 export const analyticsService = {
   async occupancy() {
-    const [totalSeats, occupied, held, confirmedBookings, waitingPassengers] = await Promise.all([
+    const [physicalSeats, occupied, held, confirmedBookings, waitingPassengers, activeJourneyDates] = await Promise.all([
       prisma.seat.count(), prisma.seatAllocation.count({ where: { status: 'BOOKED' } }), prisma.seatAllocation.count({ where: { status: 'HELD', heldUntil: { gt: new Date() } } }),
       prisma.booking.count({ where: { status: 'CONFIRMED' } }), prisma.waitingList.count({ where: { status: 'WAITING' } }),
+      prisma.booking.findMany({ where: { status: { in: ['CONFIRMED', 'PENDING', 'WAITING'] } }, distinct: ['journeyDate'], select: { journeyDate: true } }),
     ])
+    const tripCount=Math.max(1,activeJourneyDates.length)
+    const totalSeats=physicalSeats*tripCount
     const available = Math.max(0, totalSeats - occupied - held)
     return { totalSeats, occupiedSeats: occupied, heldSeats: held, availableSeats: available, waitingPassengers, confirmedBookings, occupancyPercent: totalSeats ? Number((occupied / totalSeats * 100).toFixed(1)) : 0 }
   },

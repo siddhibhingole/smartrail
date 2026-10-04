@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { AllocationStatus, BookingStatus, PaymentStatus, Prisma, TransactionStatus, TransactionType } from '@prisma/client'
+import { AllocationStatus, BookingStatus, Prisma, TransactionStatus, TransactionType } from '@prisma/client'
 import { prisma } from '../config/prisma.js'
 import { AppError } from '../utils/http.js'
 import { seatService } from './seatService.js'
-import { processMockPayment } from './paymentService.js'
 
 const ref = () => `TX-${randomUUID()}`
 export const transactionService = {
@@ -37,9 +36,9 @@ export const transactionService = {
 
       if (entry.operation === 'BOOKING') {
         if (booking.status !== BookingStatus.CONFIRMED) throw new AppError(409, 'UNDO_CONFLICT', 'The booking has changed since it was created.')
+        if (booking.payment) throw new AppError(503, 'PAYMENT_PROVIDER_UNAVAILABLE', 'A payment provider is required before a paid booking can be reversed.')
         await tx.seatAllocation.deleteMany({ where: { bookingPassengerId: { in: booking.passengers.map(p => p.id) } } })
         await tx.booking.update({ where: { id: booking.id }, data: { status: BookingStatus.CANCELLED } })
-        if (booking.payment) await tx.payment.update({ where: { id: booking.payment.id }, data: { status: PaymentStatus.REFUNDED } })
       } else if (entry.operation === 'CANCELLATION') {
         if (booking.status !== BookingStatus.CANCELLED) throw new AppError(409, 'UNDO_CONFLICT', 'The cancelled booking has changed since it was cancelled.')
         if (payload.previousStatus === 'WAITING') {
@@ -52,8 +51,7 @@ export const transactionService = {
         const journeyDate = booking.journeyDate
         const seats = await seatService.available(tx, booking.trainId, journeyDate, passengerRows.length)
         if (seats.length < passengerRows.length) throw new AppError(409, 'UNDO_CONFLICT', 'Released seats have since been assigned to another passenger.')
-        const paymentAttempt = booking.payment ? processMockPayment() : null
-        if (paymentAttempt && paymentAttempt.status !== PaymentStatus.SUCCESS) throw new AppError(409, 'UNDO_PAYMENT_FAILED', 'The demo payment could not be re-authorized, so this cancellation cannot be undone yet.')
+        if (booking.payment) throw new AppError(503, 'PAYMENT_PROVIDER_UNAVAILABLE', 'A payment provider is required before a paid cancellation can be reversed.')
         await tx.booking.update({ where: { id: booking.id }, data: { status: BookingStatus.CONFIRMED } })
         await tx.seatAllocation.createMany({ data: seats.map(s => ({ seatId: s.id, journeyDate, status: AllocationStatus.BOOKED })) })
         for (const [index, passenger] of passengerRows.entries()) {
@@ -61,7 +59,6 @@ export const transactionService = {
           await tx.bookingPassenger.update({ where: { id: passenger.id }, data: { seatId: seat.id, coachId: seat.coachId } })
           await tx.seatAllocation.update({ where: { seatId_journeyDate: { seatId: seat.id, journeyDate } }, data: { bookingPassengerId: passenger.id } })
         }
-        if (booking.payment && paymentAttempt) await tx.payment.update({ where: { id: booking.payment.id }, data: { status: PaymentStatus.SUCCESS, gatewayReference: paymentAttempt.reference } })
         if (booking.waitingList) await tx.waitingList.update({ where: { id: booking.waitingList.id }, data: { status: 'CANCELLED' } })
         }
       } else {
