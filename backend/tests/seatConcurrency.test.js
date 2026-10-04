@@ -14,6 +14,7 @@ test.skipIf(process.env.RUN_DB_TESTS !== '1')('only one of two concurrent reques
   const seat = await prisma.seat.create({ data: { coachId: coach.id, seatNumber: '36', seatType: 'WINDOW' } })
   const groupSeatIds = []
   const journeyDate = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10)
+  const journeyDateValue = new Date(`${journeyDate}T00:00:00.000Z`)
   const input = (key, travelClass = '3A') => ({ trainId: train.id, journeyDate, passengers: [{ fullName: 'Test Passenger', age: 24, gender: 'UNDISCLOSED' }], seatIds: [seat.id], groupBooking: false, travelClass, paymentMethod: 'UPI', idempotencyKey: key })
 
   try {
@@ -28,18 +29,18 @@ test.skipIf(process.env.RUN_DB_TESTS !== '1')('only one of two concurrent reques
     assert.equal(failed.length, 1)
     assert.equal(failed[0].reason.code, 'SEAT_UNAVAILABLE')
     assert.equal(failed[0].reason.status, 409)
-    assert.equal(await prisma.seatAllocation.count({ where: { seatId: seat.id, journeyDate, status: 'HELD' } }), 1)
+    assert.equal(await prisma.seatAllocation.count({ where: { seatId: seat.id, journeyDate: journeyDateValue, status: 'HELD' } }), 1)
     await bookingService.cancel(user.id, 'PASSENGER', succeeded[0].value.id)
     const cancelled = await prisma.booking.findUnique({ where: { id: succeeded[0].value.id }, include: { payment: true } })
     assert.equal(cancelled.status, 'CANCELLED')
     assert.equal(cancelled.payment.status, 'FAILED')
-    assert.equal(await prisma.seatAllocation.count({ where: { seatId: seat.id, journeyDate } }), 0)
+    assert.equal(await prisma.seatAllocation.count({ where: { seatId: seat.id, journeyDate: journeyDateValue } }), 0)
 
     const groupCoach = await prisma.coach.create({ data: { trainId: train.id, coachNumber: 'B3', coachType: 'AC 3 Tier', capacity: 2 } })
     const freeGroupSeat = await prisma.seat.create({ data: { coachId: groupCoach.id, seatNumber: '01', seatType: 'WINDOW' } })
     const occupiedGroupSeat = await prisma.seat.create({ data: { coachId: groupCoach.id, seatNumber: '02', seatType: 'MIDDLE' } })
     groupSeatIds.push(freeGroupSeat.id, occupiedGroupSeat.id)
-    await prisma.seatAllocation.create({ data: { seatId: occupiedGroupSeat.id, journeyDate, status: 'BOOKED' } })
+    await prisma.seatAllocation.create({ data: { seatId: occupiedGroupSeat.id, journeyDate: journeyDateValue, status: 'BOOKED' } })
     const bookingsBeforeGroupRequest = await prisma.booking.count({ where: { userId: user.id } })
     await assert.rejects(bookingService.create(user.id, { trainId: train.id, journeyDate, passengers: [{ fullName: 'Passenger One', age: 24, gender: 'UNDISCLOSED' }, { fullName: 'Passenger Two', age: 26, gender: 'UNDISCLOSED' }], seatIds: groupSeatIds, groupBooking: true, travelClass: '3A', paymentMethod: 'UPI', idempotencyKey: `group-${suffix}-rollback` }), error => error.code === 'SEAT_UNAVAILABLE' && error.status === 409)
     assert.equal(await prisma.booking.count({ where: { userId: user.id } }), bookingsBeforeGroupRequest)
